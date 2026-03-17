@@ -1,0 +1,1115 @@
+---
+title: "Predicting the Need for
+Tracheostomy in Infants with
+Severe Bronchopulmonary
+Dysplasia"
+author: "Kerry Ye"
+date: "2023-11-06"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = F)
+knitr::opts_chunk$set(warning = F)
+```
+
+```{r, echo = FALSE}
+library(mice)# missing data pattern and multiple imputation
+library(gtsummary) #summary statistics 
+library(naniar)
+library(tidyverse) 
+library(knitr)
+library(corrplot) # corrlation heat map 
+library(RColorBrewer)
+library(caret) # outcome stratification
+library(glmnet)
+library(L0Learn)
+library(pROC)
+library(DescTools)
+library(gt)
+library(kableExtra)
+```
+
+```{r, echo = FALSE}
+#load data
+tracheo <- read.csv("/Users/kerryqwq/Downloads/project2.csv")
+```
+
+
+\begin{abstract}
+
+Objective: In collaboration with Dr. Chris Schmid, this project aims to develop statistical models for predicting the composite outcome of tracheostomy or death, considering the indication criteria and timing of tracheostomy placement. 
+   
+Methods: We proposed four models: 1) 36-Week Model Without Interactions; 2) 36-Week Model With Interactions; 3) 44-Week Model Without Interactions; 4) 44-Week Model With Interactions. The first step in model development involves constructing datasets for both the 36-week and 44-week models. We address missing data in each dataset using the multiple imputation technique under the MAR assumption. We then allocate 70\% of each imputed dataset as training data and 30\% as the testing set, ensuring the same proportion of the outcome in both sets through stratification. The variable selection process is conducted using a lasso model. The third step involves examining the frequency table of zero coefficients across the five imputed datasets and removing variables that are nearly zero. Finally, we evaluate the performance of the four proposed models using both discrimination and calibration metrics. 
+
+Results: Overall, all four models demonstrate similarly high performance in predicting the need for tracheostomy in infants with severe bronchopulmonary dysplasia. The 44-week models have a higher AUC score, indicating better performance in distinguishing between the two outcomes. They also have lower Brier scores, suggesting more accurate probabilistic predictions. The 44-week models are more precise in predicting positive cases, while the 36-week models excel in predicting negative cases. In healthcare contexts, where correctly identifying true positives is often crucial due to the potential consequences of missing a serious condition, the 44-week models may be more appropriate.
+\end{abstract}
+
+## Introduction
+
+In collaboration with Dr. Chris Schmid, this project aims to develop statistical models for predicting the composite outcome of tracheostomy or death, considering the indication criteria and timing of tracheostomy placement. Bronchopulmonary Dysplasia (sBPD), a common sequela of prematurity, severely impacts the health of infants[1]. It affects 10,000-15,000 infants annually and is largely influenced by individual susceptibility. Current research suggests that early tracheostomy placement may benefit those with severe Bronchopulmonary Dysplasia (sBPD). However, the indication criteria and optimal timing for tracheostomy placement in neonates with sBPD remain unclear. Tracheostomy provides a stable airway, improves ventilator synchrony, and is associated with improved sBPD outcomes when performed within the first 4 months of age. Conversely, tracheostomy also carries significant risks, including an increased likelihood of death and higher infection rates[2]. Therefore, accurately predicting the eventual need for tracheostomy placement before discharge is essential.
+
+## Data Preprocessing
+
+The underlying recruitment population were drawn from the BPD Collaborative Registry, a multi-center consortium of BPD programs
+located in the United States and Sweden in order to enhance the care of children with severe forms of BPD. The registry includes infants whose gestational age is less than 32 weeks and who have severe sBPD. In the registry, standard demographic and clinical data are collected at four time points: birth, 36 weeks PMA, 44 weeks PMA and discharge. For this study, we collected the data from patients with BPD and complete growth data between January 1 and July 19, 2021. 
+
+
+```{r, echo = FALSE}
+#factor the categorical variables
+tracheo_1 <- tracheo %>%
+  mutate(
+    mat_ethn = factor(
+      mat_ethn,
+      levels = c(1, 2),
+      labels = c(
+        "Hispanic or Latino",
+        "Not Hispanic or Latino"
+      )
+    ),
+    
+    del_method = factor(
+      del_method,
+      levels = c(1, 2),
+      labels = c(
+        "Vaginal delivery",
+        "Cesarean section"
+      )
+    ),
+    
+    prenat_ster = factor(
+      prenat_ster,
+      levels = c("No", "Yes")
+    ),
+    
+    com_prenat_ster = factor(
+      com_prenat_ster,
+      levels = c("No", "Yes")
+    ),
+    
+    mat_chorio = factor(
+      mat_chorio,
+      levels = c("No", "Yes")
+    ),
+    
+    gender = factor(
+      gender,
+      levels = c("Female", "Male")
+    ),
+    
+    any_surf = factor(
+      any_surf,
+      levels = c("No", "Yes")
+    ),
+    
+    ventilation_support_level.36 = factor(
+      ventilation_support_level.36,
+      levels = c(0, 1, 2),
+      labels = c(
+        "No respiratory support or supplemental oxygen",
+        "Non-invasive positive pressure",
+        "Invasive positive pressure"
+      )
+    ),
+       ventilation_support_level_modified.44 = factor(
+      ventilation_support_level_modified.44,
+      levels = c(0, 1, 2),
+      labels = c(
+        "No respiratory support or supplemental oxygen",
+        "Non-invasive positive pressure",
+        "Invasive positive pressure"
+      )
+    ),
+    sga = factor(sga, levels = c("Not SGA", "SGA")),
+    Trach = factor(Trach, levels = c(0, 1)),
+    Death = factor(Death, levels = c("No", "Yes")),
+    med_ph.36 = factor(med_ph.36, levels = c(0, 1),
+    labels = c("No", "Yes")),
+    med_ph.44 = factor(med_ph.44, levels = c(0, 1),
+    labels = c("No", "Yes"))
+  )
+# tracheo$mat_ethn <- as.factor(tracheo$mat_ethn)
+# tracheo$del_method <- as.factor(tracheo$del_method)
+# tracheo$prenat_ster <- factor(tracheo$prenat_ster, levels = c("No", "Yes"))
+# tracheo$com_prenat_ster <- factor(tracheo$com_prenat_ster, levels = c("No", "Yes"))
+# tracheo$mat_chorio <- factor(tracheo$mat_chorio, levels = c("No", "Yes"))
+#tracheo$gender <- as.factor(tracheo$gender)
+# tracheo$sga <- as.factor(tracheo$sga)
+# # tracheo$any_surf <- factor(tracheo$any_surf, levels = c("No", "Yes"))
+# # tracheo$ventilation_support_level.36 <- as.factor(tracheo$ventilation_support_level.36)
+# # tracheo$ventilation_support_level_modified.44 <- as.factor(tracheo$ventilation_support_level_modified.44)
+# tracheo$Trach <- as.factor(tracheo$Trach)
+# tracheo$Death <- as.factor(tracheo$Death)
+# tracheo$med_ph.36 <- as.factor(tracheo$med_ph.36)
+# tracheo$med_ph.44 <- as.factor(tracheo$med_ph.44)
+```
+
+
+```{r, echo = FALSE}
+# Data Preprocessing
+tracheo_2 <- tracheo_1 %>%
+  mutate(center = ifelse(is.na(center), 1, center)) %>%
+  mutate(outcome = case_when(tracheo$Trach ==1 & tracheo$Death == "Yes" ~ 1,
+  tracheo$Trach ==1 | tracheo$Death == "Yes" ~ 1,
+  tracheo$Trach ==0 & tracheo$Death == "No" ~ 0,
+  TRUE ~ NA_real_))
+tracheo_3 <- tracheo_2[!duplicated(tracheo_2$record_id),]
+tracheo_4 <- dplyr::select(tracheo_3, -c("mat_race"))
+```
+
+
+```{r, echo = FALSE}
+tracheo_5 <- tracheo_4 %>%
+  mutate(
+    record_id = as.numeric(record_id),
+    record_id = if_else(center == 21, 1000001, record_id),
+    center = if_else(center == 21, 1, center)
+  )%>%
+  arrange(record_id)
+
+tracheo_5$outcome <- as.factor(tracheo_5$outcome)
+tracheo_5$center <- as.factor(tracheo_5$center)
+```
+
+The raw dataset initially contained 999 observations and 30 variables. After removing 3 duplicate entries, 996 individuals remained. We first converted various categorical variables into factors, reflecting their different levels. Notably, 10 individuals lacked corresponding center information; however, their **record_id** prefix (1xxxxxx) indicated they were from **center** 1, so we manually imputed their center values as 1. One individual, with **record_id:2000824**, had four duplicate rows; we retained only one row and removed the duplicates. The **mat_race** column was removed from the data due to coding inconsistencies with the codebook. Additionally, one individual's **record_id** was coded as 21000001, and their **center** code as 21. We corrected their **record_id**  to 1000001 and **center**  to 1, as their original record_id and center were incorrectly recorded for center 21 instead of center 1. Finally, we created the composite outcome, **outcome**, where individuals who had either undergone a tracheostomy or died, as well as those who had undergone both, were coded as 1, while those who had neither undergone tracheostomy nor died were coded as 0. This composite outcome can provide a more comprehensive understanding of the overall burden and risk associated with tracheostomy and mortality, thereby reflecting the overall severity or progression of Bronchopulmonary Dysplasia.
+
+\section{Exploratory Data Analysis}
+
+We conducted exploratory data analysis, which includes examining summary statistics, analyzing missing data, and evaluating correlations among variables.
+
+\subsection{Summary Statistics}
+A summary table is important because it provides crucial insights into the data's structure, helps identify potential issues, and informs the choice of appropriate statistical models and methods for analysis. In this section, we first created the following summary statistics table for the dataset, focusing on the two composite outcomes: 1 and 0.
+
+
+```{r, echo = FALSE, fig.height=3, fig.width=6}
+# Summary statistics table
+tracheo_5 %>%
+  dplyr::select(-record_id) %>%
+  tbl_summary(
+    by = outcome, # stratify by center
+    type = list(
+      all_continuous() ~ "continuous2",
+      all_dichotomous() ~ "categorical"
+    ),
+    missing = "no",
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",  # for continuous variables, display mean (SD), missing value
+      all_categorical() ~ "{n} ({p}%)" ),
+    label = list(
+      center ~ "Center",
+      mat_ethn ~ "Maternal ethnicity",
+      bw ~ "Birth weight (g)",
+      ga ~ "Obstetrical gestational age",
+      blength ~ "Birth length (cm)",
+      birth_hc ~ "Birth head circumference (cm)",
+      del_method ~ "Delivery Method",
+      prenat_ster ~ "Prenatal Corticosteroids",
+      com_prenat_ster ~ "Complete Prenatal Steroids",
+      mat_chorio ~ "Maternal Chorioamnionitis",
+      gender ~ "Gender",
+      sga ~ "Infant small for gestational age",
+      any_surf ~ "Infant receive surfactant",
+      weight_today.36 ~ "Weight at 36 weeks",
+      ventilation_support_level.36 ~ "Ventilation Support Level at 36 weeks",
+      inspired_oxygen.36 ~ "Inspired Oxygen at 36 weeks",
+      p_delta.36 ~ "Peak Inspiratory Pressure at 36 weeks",
+      peep_cm_h2o_modified.36 ~ "Positive End Expiratory Pressure at 36 weeks",
+      med_ph.36 ~ "Pulmonary Hypertension Med at 36 weeks",
+      weight_today.44 ~ "Weight at 44 weeks",
+      ventilation_support_level_modified.44 ~ "Ventilation Support Level at 44 weeks",
+      inspired_oxygen.44 ~ "Inspired Oxygen at 44 weeks",
+      p_delta.44 ~ "Peak Inspiratory Pressure at 44 weeks",
+      peep_cm_h2o_modified.44 ~ "Positive End Expiratory Pressure at 44 weeks",
+      med_ph.44 ~ "Pulmonary Hypertension Med at 44 weeks",
+      hosp_dc_ga ~ "Hospital Discharge Gestational Age",
+      Trach ~ "Tracheostomy (Y/N)",
+      Death ~ "Death (Y/N)"
+    )) %>%
+  add_n(statistic = "{n}") %>%
+  as_gt() %>%
+  tab_options(
+    table.font.size = "x-small"  # Options include "xx-small", "x-small", "small", etc.
+  ) %>%
+  tab_caption("Summary Statistics across Different Variables") 
+```
+
+
+From the summary table, we observe that there are a total of 811 infant observations where neither tracheotomy nor death occurred, while 183 observations involve either tracheotomy, death, or both. This imbalanced proportion of the outcome necessitates stratifying the outcome when conducting the train-test split. The study records data from nine centers, with Center 2 contributing the most observations, accounting for 630 individuals. Some centers have notably fewer observations; for example, Center 20 has only 4 recorded observations. Regarding birth variables, it is observed that mothers of non-Hispanic or Latino ethnicity have a higher proportion of infants undergoing tracheotomy or experiencing death. Infants who underwent tracheotomy or died tend to have lower birth weights, weights at 36 weeks, and weights at 44 weeks compared to those who did not. Additionally, males are more likely to undergo tracheotomy or experience death compared to females. Obstetrical gestational age, birth length, and head circumference appear comparable between groups with composite outcomes of 1 and 0. It is also noted that more individuals in invasive positive pressure ventilation at 36 and 44 weeks underwent tracheotomy or died compared to those in non-invasive positive pressure or without respiratory support. This observation aligns with the expectation that more severe symptoms require more invasive respiratory support. Furthermore, more cases of Cesarean section deliveries, as opposed to vaginal births, are associated with tracheotomy or death. This is consistent with the understanding that earlier deliveries, often necessitating Cesarean sections, are more likely in severe cases of Bronchopulmonary Dysplasia, a common complication in premature births.
+
+\subsection{Missing Data}
+
+Missing data can diminish the statistical power of analyses and may potentially yield less precise and robust estimates in subsequent modeling. To address this, an initial examination of the number and percentage of missing values across the entire dataset is presented in the table below.
+
+```{r, echo = FALSE}
+# missingness in tracheotomy dataset
+labels <- c(
+  center = "Center",
+  mat_ethn = "Maternal Ethnicity",
+  bw = "Birth Weight (g)",
+  ga = "Obstetrical Gestational Age",
+  blength = "Birth Length (cm)",
+  birth_hc = "Birth Head Circumference (cm)",
+  del_method = "Delivery Method",
+  prenat_ster = "Prenatal Corticosteroids",
+  com_prenat_ster = "Complete Prenatal Steroids",
+  mat_chorio = "Maternal Chorioamnionitis",
+  gender = "Gender",
+  sga = "Infant Small for Gestational Age",
+  any_surf = "Infant Received Surfactant",
+  weight_today.36 = "Weight at 36 Weeks",
+  ventilation_support_level.36 = "Ventilation Support Level at 36 Weeks",
+  inspired_oxygen.36 = "Inspired Oxygen at 36 Weeks",
+  p_delta.36 = "Peak Inspiratory Pressure at 36 Weeks",
+  peep_cm_h2o_modified.36 = "Positive End Expiratory Pressure at 36 Weeks",
+  med_ph.36 = "Pulmonary Hypertension Medication at 36 Weeks",
+  weight_today.44 = "Weight at 44 Weeks",
+  ventilation_support_level_modified.44 = "Ventilation Support Level at 44 Weeks",
+  inspired_oxygen.44 = "Inspired Oxygen at 44 Weeks",
+  p_delta.44 = "Peak Inspiratory Pressure at 44 Weeks",
+  peep_cm_h2o_modified.44 = "Positive End Expiratory Pressure at 44 Weeks",
+  med_ph.44 = "Pulmonary Hypertension Medication at 44 Weeks",
+  hosp_dc_ga = "Hospital Discharge Gestational Age",
+  Trach = "Tracheostomy (Yes/No)",
+  Death = "Death (Yes/No)"
+)
+
+tracheo_miss <- tracheo_5 %>%
+  dplyr::select(-c(record_id, Trach, Death, outcome)) %>%
+  dplyr::select(where(~ any(is.na(.)))) %>%
+  miss_var_summary() %>%
+  dplyr::mutate(
+    variable = dplyr::recode(variable, !!!labels)
+  ) %>%
+  dplyr::rename(
+    Variable = variable,
+    `Number Missing` = n_miss,
+    `Percent Missing (%)` = pct_miss
+  )
+
+tracheo_miss %>%
+kable(booktabs = T, escape = T, caption = "Missingness in Tracheostomy Dataset", align = "c", digits = 2)
+```
+
+
+
+
+Examining the 'Missingness in Tracheostomy Dataset' table reveals that the five variables with the highest percentages of missing data are **Inspired Oxygen at 44 Weeks**, **Peak Inspiratory Pressure at 44 Weeks**, **Weight at 44 Weeks**, **Positive End Expiratory Pressure at 44 Weeks**, and **Infant Received Surfactant**, with missingness percentages ranging from 44.98% to 43.47%. Relying on these columns for analysis could skew results due to their substantial amount of missing data. Notably, **Inspired Oxygen at 44 Weeks** and **Peak Inspiratory Pressure at 44 Weeks** have the highest missing data percentage, approximately 44.98%, each with 424 missing values. This table also indicates that variables recorded at 44 weeks exhibit a much higher percentage of missingness compared to those recorded at 36 weeks and at birth. The variables measured at 44 weeks contribute to the highest level of missingness, as many patients are discharged before reaching 44 weeks. Given that the discharge significantly impacts the missing data and the variables themselves are not inherently related to their own missingness, we assume that the data is Missing At Random (MAR).
+
+
+We further examine the missing values in the data by recording the missingness percentage across nine different centers in order to account for the missingness difference across different centers. 
+
+```{r, echo = FALSE}
+# missing data table by observations
+center1 <- apply(tracheo_5[tracheo_5$center==1, !(names(tracheo_5) %in% c("record_id", "center", "Trach", "Death", "outcome"))], 2, function(x){return((sum(is.na(x))/length(x)) * 100)})
+center2 <- apply(tracheo_5[tracheo_5$center==2, !(names(tracheo_5) %in% c("record_id", "center", "Trach", "Death", "outcome"))], 2, function(x){return((sum(is.na(x))/length(x)) * 100)})
+center3 <- apply(tracheo_5[tracheo_5$center==3, !(names(tracheo_5) %in% c("record_id", "center", "Trach", "Death", "outcome"))], 2, function(x){return((sum(is.na(x))/length(x)) * 100)})
+center4 <- apply(tracheo_5[tracheo_5$center==4, !(names(tracheo_5) %in% c("record_id", "center", "Trach", "Death", "outcome"))], 2, function(x){return((sum(is.na(x))/length(x)) * 100)})
+center7 <- apply(tracheo_5[tracheo_5$center==7, !(names(tracheo_5) %in% c("record_id", "center", "Trach", "Death", "outcome"))], 2, function(x){return((sum(is.na(x))/length(x)) * 100)})
+center12 <- apply(tracheo_5[tracheo_5$center==12, !(names(tracheo_5) %in% c("record_id", "center", "Trach", "Death", "outcome"))], 2, function(x){return((sum(is.na(x))/length(x)) * 100)})
+center16 <- apply(tracheo_5[tracheo_5$center==16, !(names(tracheo_5) %in% c("record_id", "center", "Trach", "Death", "outcome"))], 2, function(x){return((sum(is.na(x))/length(x)) * 100)})
+center20 <- apply(tracheo_5[tracheo_5$center==20, !(names(tracheo_5) %in% c("record_id", "center", "Trach", "Death", "outcome"))], 2, function(x){return((sum(is.na(x))/length(x)) * 100)})
+
+center_missing <- data.frame(center1, center2, center3, center4, center7, center12, center16, center20)
+colnames(center_missing) <- c("Center 1", "Center 2", "Center 3", "Center 4", "Center 7", "Center 12", "Center 16", "Center 20")
+
+
+center_missing_labeled <- center_missing %>%
+  rownames_to_column("variable") %>%
+  mutate(variable = recode(variable, !!!labels))
+
+center_missing_labeled  %>%
+kable(booktabs = T, escape = T, caption = "Missing Percentage Across Different Centers", align = "c", digits = 2) %>%
+kable_styling(latex_options = c("HOLD_position", "scale_down"))
+```
+
+From the table 'Missing Percentage Across Different Centers,' it is evident that overall, all centers have relatively low missingness in the mother and child information recorded at birth. Notably, no center has missing values for birth weight and obstetrical gestational age. However, Center 7 and Center 1 exhibit a significant proportion of missingness in recording maternal ethnicity, and Center 12 has a considerable proportion of missingness in infants' birth length and head circumference. Examining the variables associated with 36 weeks, Center 16 has no missingness, while Center 12 accounts for half of the missingness. In terms of the variables associated with 44 weeks, almost all the centers exhibit around or more than half of the data missing, except for Center 1 and Center 20, which have a smaller amount of missingness. This high level of missingness is due to many patients being discharged before 44 weeks.  Given that Center 20 has only 4 observations, its missing data record at 44 weeks may not be reliable. Center 4 shows the highest percentage of missingness for variables associated with 44 weeks, with 100% missingness, indicating that this center has never recorded information for infants at 44 weeks. Center 16 has over 86% missingness in recording 44-week data. The missingness at 44 weeks is larger than at 36 weeks, and the missingness at 36 weeks is greater than for the variables at birth, primarily because many patients are discharged during 36 and 44 weeks. Researchers should be cautious of this variation in missingness across different centers when developing related prediction models.
+
+
+```{r, echo = FALSE, include=FALSE}
+# Count NA values for each patient
+na_count_per_patient <- rowSums(is.na(tracheo_5))
+
+# Calculate the percentage of NAs for each patient
+total_columns <- ncol(tracheo_5) - 1  # Subtract 1 to exclude the 'record_id' column from the total
+percentage_na_per_patient <- (na_count_per_patient / total_columns) * 100
+
+# Create a new data frame with the 'record_id', 'na_count', and 'percentage_na'
+na_data <- data.frame(record_id = tracheo_5$record_id,
+                      center = tracheo_5$center,
+                      na_count = na_count_per_patient, 
+                      percentage_na = percentage_na_per_patient)
+
+na_data %>%
+  arrange(desc(na_count)) %>%
+  head(5)
+
+```
+From the patient's perspective, the patient with the highest percentage of missing data is identified by record_id:2000081 from Center 2, with 48.27% missingness and 14 missing values. The patients with the second and third highest missingness, having record_ids 1000049 and 2000586, both exhibit 44.83% in missing values, each with 13 missing values.
+
+
+\subsection{Correlation}
+
+We identified the issue of multicollinearity by using a correlation heatmap on all continuous variables.
+
+```{r, echo = FALSE, fig.height=5, fig.width=10}
+#Correlation heat map
+numeric_columns <- sapply(tracheo_5, is.numeric)
+tracheo_cont <- tracheo_5[, numeric_columns]
+colnames(tracheo_cont) <- ifelse(
+  colnames(tracheo_cont) %in% names(labels),
+  labels[colnames(tracheo_cont)],
+  colnames(tracheo_cont)
+)
+M <-cor(tracheo_cont, use = "complete.obs")
+corrplot(M, type="upper", order="hclust",
+         col=brewer.pal(n=8, name="RdYlBu"))
+```
+
+From this correlation heatmap, we can see that there are three pairs of variables that are highly positively correlated, with correlation coefficients above 0.75. These pairs are: weight at 36 weeks (weight_today.36) and weight at 44 weeks (weight_today.44) with a correlation of 0.79; birth weight (bw) and birth head circumference (birth_hc) with a correlation of 0.83; and birth weight (bw) with birth length (blength) with a correlation of 0.86. These highly correlated variables can introduce multicollinearity, which may lead to unreliable and unstable estimates of regression coefficients. However, given that the variable selection method we propose can automatically handle multicollinearity by shrinking the coefficients of correlated predictors to zero, it is acceptable to keep these variables in the variable selection process to retain their information.
+
+\section{Model Development}
+
+
+We propose four models:
+
+1) **36 Week Model Without Interactions**: This model includes all variables measured at birth and up to 36 weeks, considering only main effects.
+
+2) **36 Week Model With Interactions**: This includes all variables at birth and up to 36 weeks. In addition to the main effects, we consider two interaction terms: ventilation_support_level.36:inspired_oxygen.36 and ventilation_support_level.36:med_ph.36.
+
+3) **44 Week Model Without Interactions**: This model includes all variables measured at birth, 36 weeks, and 44 weeks, again considering only main effects.
+
+4) **44 Week Model With Interactions**: This includes all variables at birth, 36 weeks, and 44 weeks. Besides the main effects, four interaction terms are considered: ventilation_support_level.36:inspired_oxygen.36, ventilation_support_level.36:med_ph.36, ventilation_support_level_modified.44:inspired_oxygen.44, and ventilation_support_level_modified.44:med_ph.44.
+
+We focus on these two interactions – inspired oxygen level with ventilation support level, and inspired oxygen level with pulmonary hypertension medication – in both proposed models with interactions. This is because patients with higher inspired oxygen levels might require more ventilation support compared to those with normal oxygen levels, potentially affecting the outcomes of tracheostomy placement or mortality. Additionally, patients with higher inspired oxygen levels might be more likely to take pulmonary hypertension medications, which could also influence these outcomes.
+
+
+We proposed a variable selection method, **Lasso**, to identify the appropriate variables for inclusion in the proposed prediction models. Lasso regression is an analysis method that performs both variable selection and regularization, enhancing the prediction accuracy and interpretability of the statistical model. It incorporates a penalty term, $\lambda \sum_{j=1}^{p} |\beta_j|$, applied to different parameters of the model, effectively shrinking some coefficients and setting others to zero. 
+ 
+**First Step**
+ 
+The first step in model development involves constructing datasets for the 36-week and 44-week models. The 36-week models include variables from birth and at 36 weeks, while the 44-week models encompass variables from birth, at 36 weeks, and at 44 weeks.
+
+For each dataset, we address the missing data using the mice() function in the 'mice' package to create five imputed datasets with filled-in missing values, under the assumption of Missing At Random (MAR). We then allocate 70% of each imputed dataset as the training data and 30% as the testing set, ensuring the same proportion of the outcome in both the training and testing sets through stratification. We use the training data to train the four proposed models and evaluate their performance using the testing sets.
+
+ **Second Step**
+
+The second step in model development involves constructing the variable selection process for each imputed dataset. For each dataset, we fit a lasso regression model. Then, a 10-fold cross-validation procedure is implemented on the lasso regression to determine the best lambda value that minimizes both the sum of squared likelihoods and the penalty term. The coefficients obtained from fitting the lasso model with the best lambda value for each imputed dataset are averaged across five imputed sets to find the final model coefficients.
+
+This process is repeated for the four proposed models. For models that include interaction terms, we specify these terms in the data for the variable selection process to choose from.
+
+
+```{r, echo=FALSE}
+# Multiple imputation for 36wks
+set.seed(1)
+tracheo_36wks <- tracheo_5 %>%
+  select(
+    -c(
+      record_id, Death, Trach, hosp_dc_ga,
+      weight_today.44, ventilation_support_level_modified.44,
+      inspired_oxygen.44, p_delta.44,
+      peep_cm_h2o_modified.44, med_ph.44
+    )
+  )
+
+# Create train 70% and test 30% by stratifying outcome proportion
+#ignore <- sample(c(TRUE, FALSE), size = 996, replace = TRUE, prob = c(0.3, 0.7))
+partition_36wks <- createDataPartition(y = tracheo_36wks$outcome, p = 0.7, list = TRUE) #training set row number
+ignore_36wks <- rep(TRUE, nrow(tracheo_36wks)) # default true for ignore row
+ignore_36wks[partition_36wks$Resample1] <- FALSE # ignore the testing but not ignore the training row
+# ignore: mice learns the imputation model from the training set only, and then fills in missing values for both train and test rows using that model.
+tracheo_mice_out_36wks <- mice(
+  select(tracheo_36wks, -center),
+  m = 5,
+  seed = 1,
+  ignore = ignore_36wks,
+  print = FALSE
+)
+
+tracheo_imp_train_36wks <- vector("list", 5)
+tracheo_imp_test_36wks  <- vector("list", 5)
+
+for (i in 1:5) {
+  dat_i <- mice::complete(tracheo_mice_out_36wks, i)
+  
+  tracheo_imp_train_36wks[[i]] <- dat_i[!ignore_36wks, ]
+  tracheo_imp_test_36wks[[i]]  <- dat_i[ignore_36wks, ]
+  
+    
+  tracheo_imp_train_36wks[[i]]$center <- tracheo_36wks$center[!ignore_36wks]
+  tracheo_imp_test_36wks[[i]]$center  <- tracheo_36wks$center[ignore_36wks]
+}
+```
+
+
+```{r, echo=FALSE}
+# imp.train_36wks_1 <- filter(tracheo_mice_out_36wks, !ignore_36wks)
+# imp.test_36wks_1 <- filter(tracheo_mice_out_36wks, ignore_36wks)
+# 
+# # Create train and test imputed sets
+# tracheo_imp_train_36wks_1 <- vector("list",5)
+# tracheo_imp_test_36wks_1 <- vector("list",5)
+# for (i in 1:5) {
+#   tracheo_imp_train_36wks_1[[i]] <- mice::complete(imp.train_36wks_1,i)
+#   tracheo_imp_test_36wks_1[[i]] <- mice::complete(imp.test_36wks_1,i)
+#   tracheo_imp_train_36wks_1[[i]]$center <- tracheo_5$center[which(!ignore_36wks)]
+#   tracheo_imp_test_36wks_1[[i]]$center <- tracheo_5$center[which(ignore_36wks)]
+# }
+```
+
+
+
+```{r, echo=FALSE}
+# Multiple imputation for 44wks
+set.seed(1)
+tracheo_sub <- tracheo_5 %>%
+  select(
+    -c(
+      record_id, Death, Trach, hosp_dc_ga)
+  )
+
+# Create train 70% and test 30% by stratifying outcome proportion
+# ignore <- sample(c(TRUE, FALSE), size = 996, replace = TRUE, prob = c(0.3, 0.7))
+partition <- createDataPartition(y = tracheo_sub$outcome, p = 0.7, list = TRUE)
+ignore <- rep(TRUE, nrow(tracheo_sub))
+ignore[partition$Resample1] <- FALSE
+
+tracheo_mice_out <- mice(select(tracheo_sub,-center), m=5, seed = 1, ignore = ignore, print=F)
+
+tracheo_imp_train <- vector("list", 5)
+tracheo_imp_test  <- vector("list", 5)
+
+for (i in 1:5) {
+  dat_i <- mice::complete(tracheo_mice_out, i)
+
+  tracheo_imp_train[[i]] <- dat_i[!ignore, ]
+  tracheo_imp_test[[i]]  <- dat_i[ignore, ]
+
+  tracheo_imp_train[[i]]$center <- tracheo_sub$center[!ignore]
+  tracheo_imp_test[[i]]$center  <- tracheo_sub$center[ignore]
+}
+```
+
+
+```{r, echo=FALSE}
+# imp.train <- filter(tracheo_mice_out, !ignore)
+# imp.test <- filter(tracheo_mice_out, ignore)
+# 
+# # Create train and test imputed sets
+# tracheo_imp_train <- vector("list",5)  
+# tracheo_imp_test <- vector("list",5)  
+# for (i in 1:5) {
+#   tracheo_imp_train[[i]] <- mice::complete(imp.train,i) 
+#   tracheo_imp_test[[i]] <- mice::complete(imp.test,i) 
+#   tracheo_imp_train[[i]]$center <- tracheo$center[which(!ignore)]
+#   tracheo_imp_test[[i]]$center <- tracheo$center[which(ignore)]
+# }
+```
+
+
+
+```{r, echo=FALSE}
+###################################################### 
+#### Lasso Model#### 
+###################################################### 
+
+lasso <- function(df, modeltype, include.interact) { 
+  #' Runs 10-fold CV for lasso and returns corresponding coefficients 
+  #' @param df, data set
+  #' @return coef, coefficients for minimum cv error
+  
+  # Matrix form for ordered variables 
+  
+  df <- df %>%
+    select(-center)
+  
+  if (modeltype == 44 & include.interact==TRUE) {
+  x.ord <- model.matrix(outcome~.+ ventilation_support_level.36*inspired_oxygen.36 + ventilation_support_level.36*med_ph.36 +  ventilation_support_level_modified.44*inspired_oxygen.44 +ventilation_support_level_modified.44*med_ph.44, data = df)[,-1] 
+  } else if(modeltype == 36 & include.interact==TRUE){
+    x.ord <- model.matrix(outcome~.+ ventilation_support_level.36*inspired_oxygen.36 + ventilation_support_level.36*med_ph.36, data = df)[,-1] 
+  }
+  else{
+  x.ord <- model.matrix(outcome~., data = df)[,-1]
+  }
+  y.ord <- df$outcome
+  
+  # Generate folds
+  k <- 10 
+  set.seed(1) # consistent seeds between imputed data sets
+  folds <- sample(1:k, nrow(df), replace=TRUE)
+  
+  # Lasso model
+  lasso_mod <- cv.glmnet(x.ord, y.ord, nfolds = 10, foldid = folds, 
+                         alpha = 1, family = "binomial") 
+  
+  lasso_ml <- glmnet(x.ord, y.ord, lambda = lasso_mod$lambda.min, alpha = 1, family = "binomial")
+  # Get coefficients 
+  coef <- coef(lasso_ml, lambda = lasso_ml$lambda.min)
+  return(coef) 
+}
+```
+
+
+```{r, echo=FALSE}
+# average coefficients across five imputed datasets for 36wks without interactions
+lasso_coef1_36wks <- lasso(tracheo_imp_train_36wks[[1]], modeltype = 36, include.interact = FALSE)
+lasso_coef2_36wks <- lasso(tracheo_imp_train_36wks[[2]], modeltype = 36, include.interact = FALSE)
+lasso_coef3_36wks <- lasso(tracheo_imp_train_36wks[[3]], modeltype = 36, include.interact = FALSE)
+lasso_coef4_36wks <- lasso(tracheo_imp_train_36wks[[4]], modeltype = 36, include.interact = FALSE)
+lasso_coef5_36wks <- lasso(tracheo_imp_train_36wks[[5]], modeltype = 36, include.interact = FALSE)
+
+lasso_coef_36wks <- cbind(lasso_coef1_36wks, lasso_coef2_36wks, lasso_coef3_36wks, 
+                    lasso_coef4_36wks, lasso_coef5_36wks) 
+avg_coefs_lasso_36wks <- apply(lasso_coef_36wks, 1, mean)
+lasso1_zero_names_36wks <- rownames(lasso_coef1_36wks)[as.numeric(lasso_coef1_36wks)== 0]
+lasso2_zero_names_36wks <- rownames(lasso_coef2_36wks)[as.numeric(lasso_coef2_36wks)== 0]
+lasso3_zero_names_36wks <- rownames(lasso_coef3_36wks)[as.numeric(lasso_coef3_36wks)== 0]
+lasso4_zero_names_36wks <- rownames(lasso_coef4_36wks)[as.numeric(lasso_coef4_36wks)== 0]
+lasso5_zero_names_36wks <- rownames(lasso_coef5_36wks)[as.numeric(lasso_coef5_36wks)== 0]
+
+# create the frequency of zero coefficients table across five imputed sets
+all_zero_names_36wks <- c(lasso1_zero_names_36wks, lasso2_zero_names_36wks, lasso3_zero_names_36wks, lasso4_zero_names_36wks, lasso5_zero_names_36wks)
+allzerostable_36wks <- table(all_zero_names_36wks)
+```
+
+```{r, echo=FALSE}
+# 36wks model without interactions
+lasso_model_36wks_no_int <-avg_coefs_lasso_36wks[!names(avg_coefs_lasso_36wks) %in% c("bw", "ga", "blength", "birth_hc", "del_methodCesarean section", "com_prenat_sterYes", "weight_today.36", "p_delta.36", "peep_cm_h2o_modified.36")]
+```
+
+
+```{r, echo=FALSE}
+# average coefficients across five imputed datasets for 36wks with interactions
+lasso_int_coef1_36wks <- lasso(tracheo_imp_train_36wks[[1]], modeltype = 36, include.interact = TRUE)
+lasso_int_coef2_36wks <- lasso(tracheo_imp_train_36wks[[2]], modeltype = 36, include.interact = TRUE)
+lasso_int_coef3_36wks <- lasso(tracheo_imp_train_36wks[[3]], modeltype = 36, include.interact = TRUE)
+lasso_int_coef4_36wks <- lasso(tracheo_imp_train_36wks[[4]], modeltype = 36, include.interact = TRUE)
+lasso_int_coef5_36wks <- lasso(tracheo_imp_train_36wks[[5]], modeltype = 36, include.interact = TRUE)
+
+lasso_int_coef_36wks <- cbind(lasso_int_coef1_36wks, lasso_int_coef2_36wks, lasso_int_coef3_36wks, 
+                    lasso_int_coef4_36wks, lasso_int_coef5_36wks) 
+avg_coefs_lasso_int_36wks <- apply(lasso_int_coef_36wks, 1, mean)
+lasso1_zero_names_36wks <- rownames(lasso_int_coef1_36wks)[as.numeric(lasso_int_coef1_36wks)== 0]
+lasso2_zero_names_36wks <- rownames(lasso_int_coef2_36wks)[as.numeric(lasso_int_coef2_36wks)== 0]
+lasso3_zero_names_36wks <- rownames(lasso_int_coef3_36wks)[as.numeric(lasso_int_coef3_36wks)== 0]
+lasso4_zero_names_36wks <- rownames(lasso_int_coef4_36wks)[as.numeric(lasso_int_coef4_36wks)== 0]
+lasso5_zero_names_36wks <- rownames(lasso_int_coef5_36wks)[as.numeric(lasso_int_coef5_36wks)== 0]
+
+# Create the frequency of zero coefficients table across five imputed sets
+all_zero_names_36wks <- c(lasso1_zero_names_36wks, lasso2_zero_names_36wks, lasso3_zero_names_36wks, lasso4_zero_names_36wks, lasso5_zero_names_36wks)
+allzerostable_36wks <- table(all_zero_names_36wks)
+```
+
+
+```{r, echo=FALSE}
+# 36wks model with interactions
+lasso_model_36wks_int <- avg_coefs_lasso_int_36wks[!names(avg_coefs_lasso_int_36wks) %in% c("bw", "ga", "blength", "birth_hc", "com_prenat_sterYes", "weight_today.36", "p_delta.36", "peep_cm_h2o_modified.36")]
+```
+
+
+```{r, echo=FALSE}
+# average coefficients across five imputed datasets for 44wks without interactions
+lasso_coef1 <- lasso(tracheo_imp_train[[1]], modeltype = 44, include.interact = FALSE)
+lasso_coef2 <- lasso(tracheo_imp_train[[2]], modeltype = 44, include.interact = FALSE)
+lasso_coef3 <- lasso(tracheo_imp_train[[3]], modeltype = 44, include.interact = FALSE)
+lasso_coef4 <- lasso(tracheo_imp_train[[4]], modeltype = 44, include.interact = FALSE)
+lasso_coef5 <- lasso(tracheo_imp_train[[5]], modeltype = 44, include.interact = FALSE)
+
+lasso_coef <- cbind(lasso_coef1, lasso_coef2, lasso_coef3, 
+                    lasso_coef4, lasso_coef5) 
+avg_coefs_lasso <- apply(lasso_coef, 1, mean)
+lasso1_zero_names <- rownames(lasso_coef1)[as.numeric(lasso_coef1)== 0]
+lasso2_zero_names <- rownames(lasso_coef2)[as.numeric(lasso_coef2)== 0]
+lasso3_zero_names <- rownames(lasso_coef3)[as.numeric(lasso_coef3)== 0]
+lasso4_zero_names <- rownames(lasso_coef4)[as.numeric(lasso_coef4)== 0]
+lasso5_zero_names <- rownames(lasso_coef5)[as.numeric(lasso_coef5)== 0]
+
+# Create the frequency of zero coefficients table across five imputed sets
+all_zero_names <- c(lasso1_zero_names, lasso2_zero_names, lasso3_zero_names, lasso4_zero_names, lasso5_zero_names)
+allzerostable <- table(all_zero_names)
+```
+
+
+
+```{r, echo=FALSE}
+# 44wks model without interactions
+lasso_model_no_int <- avg_coefs_lasso[!names(avg_coefs_lasso) %in% c("bw", "ga", "blength", "birth_hc", "del_methodCesarean section", "com_prenat_sterYes", "genderMale", "sgaSGA", "weight_today.36", "p_delta.36", "peep_cm_h2o_modified.36", "med_ph.36Yes", "weight_today.44", "inspired_oxygen.44", "p_delta.44")]
+```
+
+
+
+```{r, echo=FALSE}
+# average coefficients across five imputed datasets for 44wks with interactions
+lasso_int_coef1 <- lasso(tracheo_imp_train[[1]], modeltype = 44, include.interact = TRUE)
+lasso_int_coef2 <- lasso(tracheo_imp_train[[2]], modeltype = 44, include.interact = TRUE)
+lasso_int_coef3 <- lasso(tracheo_imp_train[[3]], modeltype = 44, include.interact = TRUE)
+lasso_int_coef4 <- lasso(tracheo_imp_train[[4]], modeltype = 44, include.interact = TRUE)
+lasso_int_coef5 <- lasso(tracheo_imp_train[[5]], modeltype = 44, include.interact = TRUE)
+
+lasso_int_coef <- cbind(lasso_int_coef1, lasso_int_coef2, lasso_int_coef3, 
+                    lasso_int_coef4, lasso_int_coef5) 
+avg_coefs_lasso_int <- apply(lasso_int_coef, 1, mean)
+lasso1_zero_names <- rownames(lasso_int_coef1)[as.numeric(lasso_int_coef1)== 0]
+lasso2_zero_names <- rownames(lasso_int_coef2)[as.numeric(lasso_int_coef2)== 0]
+lasso3_zero_names <- rownames(lasso_int_coef3)[as.numeric(lasso_int_coef3)== 0]
+lasso4_zero_names <- rownames(lasso_int_coef4)[as.numeric(lasso_int_coef4)== 0]
+lasso5_zero_names <- rownames(lasso_int_coef5)[as.numeric(lasso_int_coef5)== 0]
+
+all_zero_names <- c(lasso1_zero_names, lasso2_zero_names, lasso3_zero_names, lasso4_zero_names, lasso5_zero_names)
+allzerostable <- table(all_zero_names)
+```
+
+```{r, echo=FALSE}
+# 44wks model with interactions
+lasso_model_int <- avg_coefs_lasso_int[!names(avg_coefs_lasso_int) %in% c("bw", "ga", "blength", "birth_hc", "del_methodCesarean section", "genderMale", "weight_today.36", "p_delta.36", "peep_cm_h2o_modified.36", "med_ph.36Yes", "weight_today.44", "inspired_oxygen.44", "p_delta.44", "ventilation_support_level.36Non-invasive positive pressure:inspired_oxygen.36", "ventilation_support_level.36Invasive positive pressure:inspired_oxygen.36", "ventilation_support_level_modified.44Non-invasive positive pressure:inspired_oxygen.44", "ventilation_support_level_modified.44Invasive positive pressure:inspired_oxygen.44")]
+```
+
+
+
+```{r eval=FALSE, echo=FALSE}
+bestsubset <- function(df, include.interact) {
+   if (include.interact==TRUE) {
+  x.ord <- model.matrix(outcome~.+ ventilation_support_level.36*inspired_oxygen.36 + ventilation_support_level.36*med_ph.36 +  ventilation_support_level_modified.44*inspired_oxygen.44 +ventilation_support_level_modified.44*med_ph.44, data = df)[,-1] 
+  } else{
+  x.ord <- model.matrix(outcome~., data = df)[,-1]
+  }
+  y.ord <- df$outcome
+  cv_subset <- L0Learn.cvfit(
+  x.ord,
+  y.ord,
+  seed = 1,
+  loss = "Logistic",
+  penalty = "L0",
+  nFolds = 10,
+  intercept = TRUE)
+  best_cvmeans <- which.min(cv_subset$cvMeans[[1]])
+  coef <- c(cv_subset$fit$a0[[1]][best_cvmeans], cv_subset$fit$beta[[1]][,best_cvmeans])
+  return(coef)
+}
+```
+
+
+```{r eval=FALSE, echo=FALSE}
+subset_coef1 <-bestsubset(tracheo_imp_train[[1]], include.interact = FALSE)
+subset_coef2 <-bestsubset(tracheo_imp_train[[2]], include.interact = FALSE)
+subset_coef3 <-bestsubset(tracheo_imp_train[[3]], include.interact = FALSE)
+subset_coef4 <-bestsubset(tracheo_imp_train[[4]], include.interact = FALSE)
+subset_coef5 <-bestsubset(tracheo_imp_train[[5]], include.interact = FALSE)
+
+subset_coef <- cbind(subset_coef1, subset_coef2, subset_coef3, subset_coef4, subset_coef5)
+avg_coefs_subset <- apply(subset_coef, 1, mean)
+
+subset1_zero_names <- names(avg_coefs_lasso)[which(subset_coef1 == 0)]
+subset2_zero_names <- names(avg_coefs_lasso)[which(subset_coef2 == 0)]
+subset3_zero_names <- names(avg_coefs_lasso)[which(subset_coef2 == 0)]
+subset4_zero_names <- names(avg_coefs_lasso)[which(subset_coef3 == 0)]
+subset5_zero_names <- names(avg_coefs_lasso)[which(subset_coef4 == 0)]
+
+all_zero_names <- c(subset1_zero_names, subset2_zero_names, subset3_zero_names, subset4_zero_names, subset5_zero_names)
+names(avg_coefs_subset) <- names(avg_coefs_lasso)
+allzerostable <- table(all_zero_names)
+```
+
+
+```{r eval=FALSE, echo=FALSE}
+subset_int_coef1 <-bestsubset(tracheo_imp_train[[1]], include.interact = TRUE)
+subset_int_coef2 <-bestsubset(tracheo_imp_train[[2]], include.interact = TRUE)
+subset_int_coef3 <-bestsubset(tracheo_imp_train[[3]], include.interact = TRUE)
+subset_int_coef4 <-bestsubset(tracheo_imp_train[[4]], include.interact = TRUE)
+subset_int_coef5 <-bestsubset(tracheo_imp_train[[5]], include.interact = TRUE)
+
+subset_int_coef <- cbind(subset_int_coef1, subset_int_coef2, subset_int_coef3, subset_int_coef4, subset_int_coef5)
+avg_coefs_subset_int <- apply(subset_int_coef, 1, mean)
+
+subset1_zero_names <- names(avg_coefs_lasso_int)[which(subset_int_coef1 == 0)]
+subset2_zero_names <- names(avg_coefs_lasso_int)[which(subset_int_coef2 == 0)]
+subset3_zero_names <- names(avg_coefs_lasso_int)[which(subset_int_coef2 == 0)]
+subset4_zero_names <- names(avg_coefs_lasso_int)[which(subset_int_coef3 == 0)]
+subset5_zero_names <- names(avg_coefs_lasso_int)[which(subset_int_coef4 == 0)]
+
+all_zero_names <- c(subset1_zero_names, subset2_zero_names, subset3_zero_names, subset4_zero_names, subset5_zero_names)
+names(avg_coefs_subset_int) <- names(avg_coefs_lasso_int)
+allzerostable <- table(all_zero_names)
+```
+
+
+**Third Step**
+
+The Third step of the variable selection process involves examining the frequency table of zero coefficients across the five imputed datasets and removing variables that were shrunk to zero coefficients by the lasso for all five imputed datasets. Additionally, we removed variables that had coefficients nearly zero. Although these variables did not shrink to exactly zero, their impact on the outcome is minimal. After the exclusion of these variables, we established our final model for the five imputed sets.
+
+This process is repeated for the four proposed models.
+
+The below table presents the final coefficients for 36 week models:
+```{r, echo=FALSE}
+# Final coefficients table for 36 week models
+week36_int <- c("bw", "ga", "blength", "birth_hc", "com_prenat_sterYes", "weight_today.36", "p_delta.36", "peep_cm_h2o_modified.36")
+
+avg_coefs_36wks_int_table <- exp(avg_coefs_lasso_int_36wks)
+avg_coefs_36wks_int_table[names(avg_coefs_36wks_int_table) %in% week36_int] <- 0
+
+week36_no_int <- c("bw", "ga", "blength", "birth_hc", "del_methodCesarean section", "com_prenat_sterYes", "weight_today.36", "p_delta.36", "peep_cm_h2o_modified.36")
+avg_coefs_36wks_no_int_table <- exp(avg_coefs_lasso_36wks)
+avg_coefs_36wks_no_int_table[names(avg_coefs_36wks_no_int_table) %in% week36_no_int] <- 0
+avg_coefs_36wks_no_int_table["ventilation_support_level.36Non-invasive positive pressure:inspired_oxygen.36 "] <- 0
+avg_coefs_36wks_no_int_table["ventilation_support_level.36Invasive positive pressure:inspired_oxygen.36 "] <- 0
+avg_coefs_36wks_no_int_table["ventilation_support_level.36Non-invasive positive pressure:med_ph.36Yes"] <- 0
+avg_coefs_36wks_no_int_table["ventilation_support_level.36Invasive positive pressure:med_ph.36Yes"] <- 0
+
+coeff_df <- round(data.frame(coefs_lasso_no_int = avg_coefs_36wks_no_int_table, coefs_36wks_int = avg_coefs_36wks_int_table),3)
+coeff_df[coeff_df == 0] <- "-"
+```
+
+
+```{r, echo=FALSE}
+coeff_df[coeff_df == 0] <- "-"
+rownames(coeff_df) <- c("(Intercept)", "Maternal Ethnicity", "Birth weight (g)", "Obstetrical gestational age", "Birth length (cm)", "Birth head circumference (cm)", "Delivery Method", "Prenatal Corticosteroids Yes", "Complete Prenatal Steroids Yes", "Maternal Chorioamnionitis Yes", "Gender Male", "Infant small for gestational age Yes", "infant receive surfactant Yes", "Weight 36wks", "Non-invasive Respiratory Support 36wks", "Invasive Respiratory Support 36wks", "Inspired Oxygen 36wks", "Peak Inspiratory Pressure 36wks", "Positive and exploratory pressure 36wks", "Pulmonary Hypertension Med 36wks", "Non-invasiveSupport.36:Inspired Oxygen.36", "InvasiveSupport.36:InspiredOxygen.36", "Non-invasiveSupport.36:PulmHyperMed.36", "InvasiveSupport.36:PulmHyperMed.36")
+colnames(coeff_df) <- c("36 week model", "36 week model with interactions")
+
+coeff_df %>%
+kable(caption = "36 Week models Regression Coefficient Comparisons", align = "l", booktabs = T, escape = T) %>%
+kable_styling(font_size = 8, latex_options = c("HOLD_position", "scale_down"))
+```
+These two 36-week models showed similar selection patterns for the main-effect variables. Both models excluded several highly correlated birth characteristics, including birth weight, obstetrical gestational age, birth length, and birth head circumference. At 36 weeks, several predictors were associated with the outcome of tracheostomy placement or death. For instance, the coefficients of 2.625 and 2.764 for prenatal corticosteroid use indicate a positive association with the outcome. Likewise, the large positive coefficients for invasive respiratory support at 36 weeks (7.219 and 7.957) and inspired oxygen (29.17 and 7.865) suggest strong associations with tracheostomy or death. These findings likely reflect underlying disease severity, as infants with more severe respiratory illness are more likely to undergo tracheostomy or experience death. The interaction between non-invasive support and inspired oxygen further suggests that the association between inspired oxygen at 36 weeks and the outcome is stronger among infants receiving non-invasive support than among infants with no respiratory support or supplemental oxygen. 
+
+The below table presents the final coefficients for 44 week models:
+```{r, echo=FALSE}
+# Final coefficients table for 44 week models
+week44_int <- c("bw", "ga", "blength", "birth_hc", "del_methodCesarean section", "genderMale", "weight_today.36", "p_delta.36", "peep_cm_h2o_modified.36", "med_ph.36Yes", "weight_today.44", "inspired_oxygen.44", "p_delta.44", "ventilation_support_level.36Non-invasive positive pressure:inspired_oxygen.36", "ventilation_support_level.36Invasive positive pressure:inspired_oxygen.36", "ventilation_support_level_modified.44Non-invasive positive pressure:inspired_oxygen.44", "ventilation_support_level_modified.44Invasive positive pressure:inspired_oxygen.44")
+avg_coefs_44wks_int_table <- exp(avg_coefs_lasso_int)
+avg_coefs_44wks_int_table[names(avg_coefs_44wks_int_table) %in% week44_int] <- 0
+
+
+week44_no_int <- c("bw", "ga", "blength", "birth_hc", "del_methodCesarean section", "com_prenat_sterYes", "genderMale", "sgaSGA", "weight_today.36", "p_delta.36", "peep_cm_h2o_modified.36", "med_ph.36Yes", "weight_today.44", "inspired_oxygen.44", "p_delta.44")
+avg_coefs_44wks_no_int_table <- exp(avg_coefs_lasso)
+avg_coefs_44wks_no_int_table[names(avg_coefs_44wks_no_int_table) %in% week44_no_int] <- 0
+avg_coefs_44wks_no_int_table["ventilation_support_level.36Non-invasive positive pressure:inspired_oxygen.36 "] <- 0
+avg_coefs_44wks_no_int_table["ventilation_support_level.36Invasive positive pressure:inspired_oxygen.36"] <- 0
+avg_coefs_44wks_no_int_table["ventilation_support_level.36Non-invasive positive pressure:med_ph.36Yes"] <- 0
+avg_coefs_44wks_no_int_table["ventilation_support_level.36Invasive positive pressure:med_ph.36Yes"] <- 0
+avg_coefs_44wks_no_int_table["ventilation_support_level_modified.44Non-invasive positive pressure:inspired_oxygen.44"] <- 0
+avg_coefs_44wks_no_int_table["ventilation_support_level_modified.44Invasive positive pressure:inspired_oxygen.44"] <- 0
+avg_coefs_44wks_no_int_table["ventilation_support_level_modified.44Non-invasive positive pressure:med_ph.44Yes"] <- 0
+avg_coefs_44wks_no_int_table["ventilation_support_level_modified.44Invasive positive pressure:med_ph.44Yes"] <- 0
+
+coeff_df <- round(data.frame(coefs_44wks_no_int = avg_coefs_44wks_no_int_table, coefs_44wks_int = avg_coefs_44wks_int_table),3)
+```
+
+
+```{r, echo=FALSE}
+coeff_df[coeff_df == 0] <- "-"
+rownames(coeff_df) <- c("(Intercept)", "Maternal Ethnicity", "Birth weight (g)", "Obstetrical gestational age", "Birth length (cm)", "Birth head circumference (cm)", "Delivery Method", "Prenatal Corticosteroids Yes", "Complete Prenatal Steroids Yes", "Maternal Chorioamnionitis Yes", "Gender Male", "Infant small for gestational age Yes", "infant receive surfactant Yes", "Weight 36wks", "Non-invasive Respiratory Support 36wks", "Invasive Respiratory Support 36wks", "Inspired Oxygen 36wks", "Peak Inspiratory Pressure 36wks", "Positive and exploratory pressure 36wks", "Pulmonary Hypertension Med 36wks","Weight 44wks", "Non-invasive Respiratory Support 44wks", "Invasive Respiratory Support 44wks",  "Inspired Oxygen 44wks", "Peak Inspiratory Pressure 44wks", "Positive and exploratory pressure 44wks", "Pulmonary Hypertension Med 44wks", "Non-invasiveSupport.36:Inspired Oxygen.36", "InvasiveSupport.36:InspiredOxygen.36", "Non-invasiveSupport.36:PulmHyperMed.36", "InvasiveSupport.36:PulmHyperMed.36", "Non-invasiveSupport.44:Inspired Oxygen.44", "InvasiveSupport.44:InspiredOxygen.44", "Non-invasiveSupport.44:PulmHyperMed.44", "InvasiveSupport.44:PulmHyperMed.44")
+colnames(coeff_df) <- c("44 week model", "44 week model with interactions")
+
+coeff_df %>%
+kable(caption = "44 Week models Regression Coefficient Comparisons", align = "l", booktabs = T, escape = T) %>%
+kable_styling(font_size = 8, latex_options = c("HOLD_position", "scale_down"))
+```
+
+The two 44-week lasso logistic regression models showed similar variable selection patterns, with both excluding several highly correlated birth measures, including birth weight, gestational age, birth length, and head circumference. In both models, prenatal corticosteroid use, maternal chorioamnionitis, surfactant use, invasive respiratory support at 36 weeks, and pulmonary hypertension-related variables were positively associated with tracheostomy or death. Specifically, invasive respiratory support at 36 weeks had coefficients of 2.332 and 4.208, and inspired oxygen at 36 weeks had coefficients of 6.411 and 3.247, suggesting that greater respiratory severity is strongly associated with the outcome. At 44 weeks, invasive respiratory support and pulmonary hypertension medication also remained important predictors. In the interaction model, the positive interaction terms for non-invasive support and pulmonary hypertension medication at both 36 weeks (2.439) and 44 weeks (3.467) suggest that the association of pulmonary hypertension treatment with the outcome is stronger among infants requiring non-invasive respiratory support. Overall, these findings indicate that persistent respiratory and pulmonary hypertension severity are key predictors of tracheostomy placement or death.
+
+\section{Model Evaluation}
+
+We evaluate the performance of the 36 and 44 week models based on both discrimination and calibration. Discrimination refers to a model's ability to correctly differentiate between positive and negative outcomes. In this context, we use **Sensitivity**, **Specificity**, and the **Area Under the Curve (AUC)** from the ROC-AUC plot to assess the model's ability to distinguish between composite outcomes of 1 and 0. Calibration, meanwhile, measures how well the predicted probabilities of an event match the observed outcomes. We assess the performance of these two models using the **Brier Score**.
+
+For each model, we first calculated the predicted outcome values for each imputed testing set by using the coefficients calculated from the trained models, multiplied by the predictor values from the imputed testing set. Then, we used the formula $\frac{1}{1 + e^{-(\beta_0 + \beta_1 + \ldots)}}$ to calculate the predicted probabilities. Finally, we transformed these probabilities into binary outcomes using the optimal threshold.
+
+```{r, echo=FALSE}
+# Performance Metrics Calculation for 36 Week Model without Interactions
+auc_lasso_36wks <- numeric(5)
+sensitivity_lasso_36wks <- numeric(5)
+specificity_lasso_36wks <- numeric(5)
+threshold_lasso_36wks <- numeric(5)
+BrierScore_lasso_36wks <- numeric(5)
+
+for (i in 1:5) {
+x_test <- model.matrix(outcome~., data=tracheo_imp_test_36wks[[i]])
+y_test <- tracheo_imp_test_36wks[[i]]$outcome
+
+qq <- x_test[,colnames(x_test) %in% names(lasso_model_36wks_no_int)]
+qq <- as.matrix(qq)
+dimnames(qq) <- NULL
+pred <- qq %*% c(as.numeric(lasso_model_36wks_no_int))
+predprob_lasso <- 1 / (1 + exp(-pred))
+
+roc_info <- roc(predictor=as.numeric(predprob_lasso), 
+               response=y_test)
+roc_coord <- coords(roc = roc_info, x="best")
+auc_lasso_36wks[i] <- auc(roc_info)
+sensitivity_lasso_36wks[i] <- roc_coord$sensitivity
+specificity_lasso_36wks[i] <- roc_coord$specificity
+threshold_lasso_36wks[i] <- roc_coord$threshold
+BrierScore_lasso_36wks[i] <- BrierScore(as.numeric(as.character(y_test)), predprob_lasso)
+}
+
+auc_lasso_36wks <-  mean(auc_lasso_36wks)
+sensitivity_lasso_36wks <- mean(sensitivity_lasso_36wks)
+specificity_lasso_36wks <- mean(specificity_lasso_36wks)
+threshold_lasso_36wks <- mean(threshold_lasso_36wks)
+BrierScore_lasso_36wks <- mean(BrierScore_lasso_36wks)
+```
+
+```{r, echo=FALSE}
+# Performance Metrics Calculation for 36 Week Model with Interactions
+auc_lasso_36wks_int <- numeric(5)
+sensitivity_lasso_36wks_int <- numeric(5)
+specificity_lasso_36wks_int <- numeric(5)
+threshold_lasso_36wks_int <- numeric(5)
+BrierScore_lasso_36wks_int <- numeric(5)
+
+for (i in 1:5) {
+x_test <- model.matrix(outcome~.+ ventilation_support_level.36*inspired_oxygen.36 + ventilation_support_level.36*med_ph.36, data=tracheo_imp_test_36wks[[i]])
+y_test <- tracheo_imp_test_36wks[[i]]$outcome
+
+qq <- x_test[,colnames(x_test) %in% names(lasso_model_36wks_int)]
+qq <- as.matrix(qq)
+dimnames(qq) <- NULL
+pred <- qq %*% c(as.numeric(lasso_model_36wks_int))
+predprob_lasso <- 1 / (1 + exp(-pred))
+
+roc_info <- roc(predictor=as.numeric(predprob_lasso), 
+               response=y_test)
+roc_coord <- coords(roc = roc_info, x="best")
+auc_lasso_36wks_int[i] <- auc(roc_info)
+sensitivity_lasso_36wks_int[i] <- roc_coord$sensitivity
+specificity_lasso_36wks_int[i] <- roc_coord$specificity
+threshold_lasso_36wks_int[i] <- roc_coord$threshold
+BrierScore_lasso_36wks_int[i] <- BrierScore(as.numeric(as.character(y_test)), predprob_lasso)
+}
+auc_lasso_36wks_int <-  mean(auc_lasso_36wks_int)
+sensitivity_lasso_36wks_int <- mean(sensitivity_lasso_36wks_int)
+specificity_lasso_36wks_int <- mean(specificity_lasso_36wks_int)
+threshold_lasso_36wks_int <- mean(threshold_lasso_36wks_int)
+BrierScore_lasso_36wks_int <- mean(BrierScore_lasso_36wks_int)
+```
+
+
+```{r, echo = FALSE}
+# Performance Metrics Calculation for 44 Week Model without Interactions
+auc_lasso <- numeric(5)
+sensitivity_lasso <- numeric(5)
+specificity_lasso <- numeric(5)
+threshold_lasso <- numeric(5)
+BrierScore_lasso <- numeric(5)
+
+for (i in 1:5) {
+x_test <- model.matrix(outcome~., data=tracheo_imp_test[[i]])
+y_test <- tracheo_imp_test[[i]]$outcome
+
+qq <- x_test[,colnames(x_test) %in% names(lasso_model_no_int)]
+qq <- as.matrix(qq)
+dimnames(qq) <- NULL
+pred <- qq %*% c(as.numeric(lasso_model_no_int))
+predprob_lasso <- 1 / (1 + exp(-pred))
+
+roc_info <- roc(predictor=as.numeric(predprob_lasso), 
+               response=y_test)
+# “best” threshold is usually chosen to balance sensitivity and specificity
+roc_coord <- coords(roc = roc_info, x="best")
+auc_lasso[i] <- auc(roc_info)
+sensitivity_lasso[i] <- roc_coord$sensitivity
+specificity_lasso[i] <- roc_coord$specificity
+threshold_lasso[i] <- roc_coord$threshold
+BrierScore_lasso[i] <- BrierScore(as.numeric(as.character(y_test)), predprob_lasso)
+}
+
+auc_lasso <-  mean(auc_lasso)
+sensitivity_lasso <- mean(sensitivity_lasso)
+specificity_lasso <- mean(specificity_lasso)
+threshold_lasso <- mean(threshold_lasso)
+BrierScore_lasso <- mean(BrierScore_lasso)
+```
+
+
+```{r, echo=FALSE}
+# Performance Metrics Calculation for 44 Week Model with Interactions
+auc_lasso_int <- numeric(5)
+sensitivity_lasso_int <- numeric(5)
+specificity_lasso_int <- numeric(5)
+threshold_lasso_int <- numeric(5)
+BrierScore_lasso_int <- numeric(5)
+
+for (i in 1:5) {
+x_test <- model.matrix(outcome~.+ ventilation_support_level.36*inspired_oxygen.36 + ventilation_support_level.36*med_ph.36 +ventilation_support_level_modified.44*inspired_oxygen.44 +ventilation_support_level_modified.44*med_ph.44, data = tracheo_imp_test[[i]])
+y_test <- tracheo_imp_test[[i]]$outcome
+
+qq <- x_test[,colnames(x_test) %in% names(lasso_model_int)]
+qq <- as.matrix(qq)
+dimnames(qq) <- NULL
+pred <- qq %*% c(as.numeric(lasso_model_int))
+predprob_lasso <- 1 / (1 + exp(-pred))
+
+roc_info <- roc(predictor=as.numeric(predprob_lasso), 
+               response=y_test)
+roc_coord <- coords(roc = roc_info, x="best")
+auc_lasso_int[i] <- auc(roc_info)
+sensitivity_lasso_int[i] <- roc_coord$sensitivity
+specificity_lasso_int[i] <- roc_coord$specificity
+threshold_lasso_int[i] <- roc_coord$threshold
+BrierScore_lasso_int[i] <- BrierScore(as.numeric(as.character(y_test)), predprob_lasso)
+}
+
+auc_lasso_int <- mean(auc_lasso_int)
+sensitivity_lasso_int <- mean(sensitivity_lasso_int)
+specificity_lasso_int <- mean(specificity_lasso_int)
+threshold_lasso_int <- mean(threshold_lasso_int)
+BrierScore_lasso_int <- mean(BrierScore_lasso_int)
+```
+
+
+```{r eval=FALSE, echo=FALSE}
+# Best subset code (REFERENCE ONLY)
+auc_subsetlogistic <- numeric(5)
+sensitivity_subsetlogistic <- numeric(5)
+specificity_subsetlogistic <- numeric(5)
+threshold_subsetlogistic <- numeric(5)
+BrierScore_subsetlogistic <- numeric(5)
+
+for (i in 1:5) {
+x_test <- model.matrix(outcome~., data=tracheo_imp_test[[i]])
+y_test <- tracheo_imp_test[[i]]$outcome
+
+qq <- x_test[,colnames(x_test) %in% names(subsetlogistic_no_int)]
+qq <- as.matrix(qq)
+dimnames(qq) <- NULL
+pred <- qq %*% c(as.numeric(subsetlogistic_no_int))
+predprob_subsetlogistic <- 1 / (1 + exp(-pred))
+
+roc_info <- roc(predictor=as.numeric(predprob_subsetlogistic), 
+               response=y_test)
+roc_coord <- coords(roc = roc_info, x="best")
+auc_subsetlogistic[i] <- auc(roc_info)
+sensitivity_subsetlogistic[i] <- roc_coord$sensitivity
+specificity_subsetlogistic[i] <- roc_coord$specificity
+threshold_subsetlogistic[i] <- roc_coord$threshold
+BrierScore_subsetlogistic[i] <- BrierScore(as.numeric(as.character(y_test)), predprob_subsetlogistic)
+}
+
+auc_subsetlogistic <-  mean(auc_subsetlogistic)
+sensitivity_subsetlogistic <- mean(sensitivity_subsetlogistic)
+specificity_subsetlogistic <- mean(specificity_subsetlogistic)
+threshold_subsetlogistic <- mean(threshold_subsetlogistic)
+BrierScore_subsetlogistic <- mean(BrierScore_subsetlogistic)
+
+auc_subsetlogistic_int <- numeric(5)
+sensitivity_subsetlogistic_int <- numeric(5)
+specificity_subsetlogistic_int <- numeric(5)
+threshold_subsetlogistic_int <- numeric(5)
+BrierScore_subsetlogistic_int <- numeric(5)
+
+for (i in 1:5) {
+x_test <- model.matrix(outcome~.+ ventilation_support_level.36*inspired_oxygen.36 + ventilation_support_level.36*med_ph.36 +ventilation_support_level_modified.44*inspired_oxygen.44 +ventilation_support_level_modified.44*med_ph.44, data = tracheo_imp_test[[i]])
+y_test <- tracheo_imp_test[[i]]$outcome
+
+qq <- x_test[,colnames(x_test) %in% names(subsetlogistic_int)]
+qq <- as.matrix(qq)
+dimnames(qq) <- NULL
+pred <- qq %*% c(as.numeric(subsetlogistic_int))
+predprob_subsetlogistic <- 1 / (1 + exp(-pred))
+
+roc_info <- roc(predictor=as.numeric(predprob_subsetlogistic), 
+               response=y_test)
+roc_coord <- coords(roc = roc_info, x="best")
+auc_subsetlogistic_int[i] <- auc(roc_info)
+sensitivity_subsetlogistic_int[i] <- roc_coord$sensitivity
+specificity_subsetlogistic_int[i] <- roc_coord$specificity
+threshold_subsetlogistic_int[i] <- roc_coord$threshold
+BrierScore_subsetlogistic_int[i] <- BrierScore(as.numeric(as.character(y_test)), predprob_subsetlogistic)
+}
+
+auc_subsetlogistic_int <-  mean(auc_subsetlogistic_int)
+sensitivity_subsetlogistic_int <- mean(sensitivity_subsetlogistic_int)
+specificity_subsetlogistic_int <- mean(specificity_subsetlogistic_int)
+threshold_subsetlogistic_int <- mean(threshold_subsetlogistic_int)
+BrierScore_subsetlogistic_int <- mean(BrierScore_subsetlogistic_int)
+```
+
+
+```{r, echo=FALSE}
+# Model evaluation measures table
+metrics_table <- data.frame(Measures = c("AUC", "Sensitivity", "Specificity","Threshold", "BrierScore"),
+                            weeks36 = round(c(auc_lasso_36wks, sensitivity_lasso_36wks, specificity_lasso_36wks, threshold_lasso_36wks, BrierScore_lasso_36wks),3),
+                            weeks36_with_interaction = round(c(auc_lasso_36wks_int, sensitivity_lasso_36wks_int, specificity_lasso_36wks_int, threshold_lasso_36wks_int, BrierScore_lasso_36wks_int),3),
+                            weeks44 = round(c(auc_lasso, sensitivity_lasso, specificity_lasso, threshold_lasso, BrierScore_lasso),3),
+                            weeks44_with_interaction = round(c(auc_lasso_int, sensitivity_lasso_int, specificity_lasso_int, threshold_lasso_int, BrierScore_lasso_int),3)
+          )
+colnames(metrics_table) <- c(" ", "36 Week Model", "36 Week Model with Interactions", "44 Week Model", "44 Week Model with Interactions")
+kable(metrics_table, caption = "Model Evaluation Measures", align = "l", booktabs = T, escape = T, digits = 3)  %>%
+  kable_styling(latex_options = c("HOLD_position", "scale_down"))
+```
+
+We calculated evaluation metrics for each imputed testing set and average them across the five imputed testing sets.
+
+Among the four models, they share similar AUC (Area Under the Curve) scores. The 44-week models, both with and without interactions, have slightly higher AUC scores compared to the 36-week models. Specifically, the 44-week model without interaction has the highest AUC score. With an AUC score of 0.910 for the 44-week model without interaction, there is a 91% chance that the model will correctly distinguish between patients with and without tracheotomy and death.
+
+The 44-week models exhibit higher sensitivity compared to the 36-week models, meaning they more frequently correctly identify patients with active tracheotomy and death. Conversely, the 36-week models demonstrate slightly higher specificity, indicating a greater accuracy in correctly classifying patients without tracheotomy and death.
+
+All models have very small thresholds. The 36-week models have a slightly lower threshold compared to the 36-week models, suggesting that they are set to be more sensitive in detecting positive cases, which could potentially lead to an increase in false positives.
+
+Furthermore, the 44-week models have smaller Brier scores compared to the 36-week models, suggesting that they provide more accurate predictions regarding patients' tracheotomy and death outcomes. Notably, the 44-week model without interactions has the smallest Brier score, indicating its superior predictive accuracy.
+
+\section{Conclusion}
+
+Overall, all four models demonstrate similarly high performance in predicting the need for tracheostomy in infants with severe bronchopulmonary dysplasia. The 44-week models have a higher AUC score, indicating better performance in distinguishing between the two outcomes. They also have lower Brier scores, suggesting more accurate probabilistic predictions. The 44-week models are more precise in predicting positive cases, while the 36-week models excel in predicting negative cases. In healthcare contexts, where correctly identifying true positives is often crucial due to the potential consequences of missing a serious condition, the 44-week models may be more appropriate. Early detection can lead to timely interventions, reducing the risk of complications and improving patient outcomes. However, the choice of the best predictive model should depend on several factors related to the specific needs of researchers and practitioners. It's worth noting that the 36-week models contain less information than the 44-week models, which may impact their predictive capabilities.
+
+\newpage
+
+\section{Appendix}
+
+
+```{r, echo=FALSE}
+#Frequency of Zero Coefficients Across Five Imputed Sets for 36 Week Models
+t1 <- rowSums(as.matrix(lasso_coef_36wks)==0)
+t1["ventilation_support_level.36Non-invasive positive pressure:inspired_oxygen.36"] <- "-"
+t1["ventilation_support_level.36Invasive positive pressure:inspired_oxygen.36"] <- "-"
+t1["ventilation_support_level.36Non-invasive positive pressure:med_ph.36Yes"] <- "-"
+t1["ventilation_support_level.36Invasive positive pressure:med_ph.36Yes"] <- "-"
+zero_freq <- data.frame(lasso = t1, week36 = rowSums(as.matrix(lasso_int_coef_36wks)==0))
+colnames(zero_freq) <- c("36 Week Model", "36 Week Model with Interactions")
+zero_freq %>%
+kable(booktabs = T, escape = T, caption = "Frequency of Zero Coefficients Across Five Imputed Sets for 36 Week Models", align = "l", digits = 3)  %>%
+kable_styling(font_size = 8, latex_options = c("HOLD_position", "scale_down"))
+```
+
+
+```{r, echo=FALSE}
+#Frequency of Zero Coefficients in 44 Week Models Across Five Imputed Sets
+t2 <- rowSums(as.matrix(lasso_coef)==0)
+t2["ventilation_support_level.36Non-invasive positive pressure:inspired_oxygen.36"] <- "-"
+t2["ventilation_support_level.36Invasive positive pressure:inspired_oxygen.36"] <- "-"
+t2["ventilation_support_level.36Non-invasive positive pressure:med_ph.36Yes"] <- "-"
+t2["ventilation_support_level.36Invasive positive pressure:med_ph.36Yes"] <- "-"
+t2["ventilation_support_level_modified.44Non-invasive positive pressure:inspired_oxygen.44"] <- "-"
+t2["ventilation_support_level_modified.44Invasive positive pressure:inspired_oxygen.44"] <- "-"
+t2["ventilation_support_level_modified.44Non-invasive positive pressure:med_ph.44Yes"] <- "-"
+t2["ventilation_support_level_modified.44Invasive positive pressure:med_ph.44Yes"] <- "-"
+zero_freq <- data.frame(lasso = t2, week36 = rowSums(as.matrix(lasso_int_coef)==0))
+colnames(zero_freq) <- c("44 Week Model", "44 Week Model with Interactions")
+zero_freq %>%
+kable(booktabs = T, escape = T,caption = "Frequency of Zero Coefficients in 44 Week Models Across Five Imputed Sets", align = "l", digits = 3)  %>%
+kable_styling(font_size = 8, latex_options = c("HOLD_position", "scale_down"))
+```
+
+\newpage
+
+\section{References}
+[1] Jensen, E. A., & Schmidt, B. (2014). Epidemiology of bronchopulmonary dysplasia. Birth Defects Research Part A: Clinical and Molecular Teratology, 100(3), 145-157.
+
+[2]Mckinney, R., & Levin, J. (2023).Predicting the need for tracheostomy in infants with severe bronchopulmonary dysplasia. (Presentation)
+
+\newpage
+
+## Code Appendix:
+
+```{r get-labels, echo=FALSE}
+labs = knitr::all_labels()
+labs = setdiff(labs, c("get-labels"))
+```
+
+```{r all-code, ref.label=labs, echo=TRUE, eval=FALSE}
+```
+
+
+
+
